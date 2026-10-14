@@ -1,15 +1,28 @@
 """Check PCM fidelity and planar direction quaternions without USB hardware."""
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import rclpy.time
 import tf_transformations as transforms
 from respeaker_ros.respeaker_node import RespeakerNode
+from respeaker_ros.respeaker_node import main
+import rclpy
 
 
 class SensorOutputTest(unittest.TestCase):
+    def test_audio_stops_before_context_shutdown(self):
+        publisher = Mock()
+        context_alive_at_stop = []
+        publisher.respeaker_audio.stop.side_effect = lambda: context_alive_at_stop.append(rclpy.ok())
+        with patch('respeaker_ros.respeaker_node.RespeakerNode', return_value=publisher), \
+                patch('respeaker_ros.respeaker_node.rclpy.spin', side_effect=KeyboardInterrupt):
+            main()
+        self.assertEqual(context_alive_at_stop, [True])
+        publisher.destroy_node.assert_called_once()
+        self.assertFalse(rclpy.ok())
+
     def test_signed_pcm_round_trip(self):
         publisher = Mock()
         publisher.get_subscription_count.return_value = 1
