@@ -9,9 +9,14 @@ import tf_transformations as transforms
 from respeaker_ros.respeaker_node import RespeakerNode
 from respeaker_ros.respeaker_node import main
 import rclpy
+from respeaker_ros.audio import capture_stamp_ns
 
 
 class SensorOutputTest(unittest.TestCase):
+    def test_adc_clock_maps_to_host_utc(self):
+        self.assertEqual(capture_stamp_ns({'input_buffer_adc_time': 10.0, 'current_time': 10.064},
+                                         2_000_000_000), 1_936_000_000)
+        self.assertEqual(capture_stamp_ns({}, 2_000_000_000), 2_000_000_000)
     def test_audio_stops_before_context_shutdown(self):
         publisher = Mock()
         context_alive_at_stop = []
@@ -26,8 +31,13 @@ class SensorOutputTest(unittest.TestCase):
     def test_signed_pcm_round_trip(self):
         publisher = Mock()
         publisher.get_subscription_count.return_value = 1
+        stamped_publisher = Mock()
+        stamped_publisher.get_subscription_count.return_value = 1
         node = SimpleNamespace(
             _pub_audio_channels={0: publisher}, _pub_audio=publisher,
+            _pub_audio_channels_stamped={0: stamped_publisher}, _pub_audio_stamped=stamped_publisher,
+            sensor_frame_id=SimpleNamespace(value='respeaker_base'),
+            get_clock=lambda: SimpleNamespace(now=lambda: rclpy.time.Time(seconds=2)),
             main_channel=SimpleNamespace(value=0), is_speaking=False,
             speech_prefetch_buffer=np.zeros(32, dtype=np.uint8))
         samples = np.array([-32768, -1, 0, 1, 32767], dtype=np.int16)
@@ -36,6 +46,9 @@ class SensorOutputTest(unittest.TestCase):
         decoded = np.frombuffer(bytes(msg.data), dtype='<i2')
         np.testing.assert_array_equal(decoded, samples)
         self.assertEqual(len(msg.data), 2 * len(samples))
+        stamped = stamped_publisher.publish.call_args.args[0]
+        self.assertEqual(stamped.header.stamp.sec, 2)
+        np.testing.assert_array_equal(np.frombuffer(bytes(stamped.audio.data), dtype='<i2'), samples)
 
     def test_direction_is_yaw_with_ros_xyzw_order(self):
         publisher = Mock()

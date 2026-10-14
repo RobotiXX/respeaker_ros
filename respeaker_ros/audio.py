@@ -1,11 +1,27 @@
 from .util import ignore_stderr
 import pyaudio
 import numpy as np
+import math
+import time
+
+
+def capture_stamp_ns(time_info, host_ns):
+    """Estimate first-sample UTC by mapping PortAudio's ADC/current clock pair.
+
+    This is a host-clock estimate, not hardware PTP synchronization. Fall back
+    to callback receive time when the audio backend supplies no valid times.
+    """
+    adc = time_info.get('input_buffer_adc_time', 0)
+    current = time_info.get('current_time', 0)
+    if adc > 0 and current > 0 and math.isfinite(adc) and math.isfinite(current):
+        return host_ns + round((adc - current) * 1e9)
+    return host_ns
 
 
 class RespeakerAudio(object):
-    def __init__(self, on_audio, channels=None, suppress_error=True):
+    def __init__(self, on_audio, channels=None, suppress_error=True, timestamped_callback=False):
         self.on_audio = on_audio
+        self.timestamped_callback = timestamped_callback
         with ignore_stderr(enable=suppress_error):
             self.pyaudio = pyaudio.PyAudio()
         self.available_channels = None
@@ -70,6 +86,7 @@ class RespeakerAudio(object):
             pass
 
     def stream_callback(self, in_data, frame_count, time_info, status):
+        stamp_ns = capture_stamp_ns(time_info, time.time_ns())
         # split channel
         data = np.fromstring(in_data, dtype=np.int16)
         chunk_per_channel = len(data) // self.available_channels
@@ -77,7 +94,10 @@ class RespeakerAudio(object):
         for chan in self.channels:
             chan_data = data[:, chan]
             # invoke callback
-            self.on_audio(chan_data, chan)
+            if self.timestamped_callback:
+                self.on_audio(chan_data, chan, stamp_ns)
+            else:
+                self.on_audio(chan_data, chan)
         return None, pyaudio.paContinue
 
     def start(self):

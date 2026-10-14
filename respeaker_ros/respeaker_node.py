@@ -12,7 +12,7 @@ from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 
 
-from audio_common_msgs.msg import AudioData
+from audio_common_msgs.msg import AudioData, AudioDataStamped, AudioInfo
 from std_msgs.msg import UInt16, Int32, Bool, ColorRGBA
 from geometry_msgs.msg import PoseStamped
 
@@ -39,7 +39,7 @@ class RespeakerNode(Node):
         self.doa_yaw_offset = self.declare_parameter('doa_yaw_offset', 90.0)
 
         self.respeaker = RespeakerInterface()
-        self.respeaker_audio = RespeakerAudio(self.on_audio, suppress_error=True)
+        self.respeaker_audio = RespeakerAudio(self.on_audio, suppress_error=True, timestamped_callback=True)
 
         self.speech_audio_buffer = []
         self.is_speaking = False
@@ -53,6 +53,12 @@ class RespeakerNode(Node):
         self._pub_doa = self.create_publisher(PoseStamped, 'doa', latching_qos)
         self._pub_audio = self.create_publisher(AudioData, 'audio', 10)
         self._pub_audio_channels = {c: self.create_publisher(AudioData, 'audio/channel%d' % c, 10) for c in self.respeaker_audio.channels}
+        self._pub_audio_stamped = self.create_publisher(AudioDataStamped, 'audio_stamped', 10)
+        self._pub_audio_channels_stamped = {c: self.create_publisher(AudioDataStamped, 'audio/channel%d/stamped' % c, 10) for c in self.respeaker_audio.channels}
+        self._pub_audio_info = self.create_publisher(AudioInfo, 'audio_info', latching_qos)
+        self._pub_audio_info.publish(AudioInfo(channels=1, sample_rate=self.respeaker_audio.rate,
+            sample_format='S16LE', bitrate=self.respeaker_audio.rate * self.respeaker_audio.bitdepth,
+            coding_format='raw'))
         self._pub_speech_audio = self.create_publisher(AudioData, 'speech_audio', 10)
         self._timer = self.create_timer(self.update_period_s.value, self.on_timer)
 
@@ -64,13 +70,22 @@ class RespeakerNode(Node):
         self.timer_led = None
         self.sub_led = self.create_subscription(ColorRGBA, "status_led", self.on_status_led, 1)
 
-    def on_audio(self, data, channel):
+    def on_audio(self, data, channel, capture_time_ns=None):
         # Preserve both bytes of each signed 16-bit little-endian PCM sample.
         as_uint8 = np.ascontiguousarray(data, dtype="<i2").view(np.uint8)
+        stamped = AudioDataStamped(audio=AudioData(data=as_uint8))
+        stamped.header.frame_id = self.sensor_frame_id.value
+        stamped.header.stamp = (self.get_clock().now().to_msg() if capture_time_ns is None
+                                else rclpy.time.Time(nanoseconds=capture_time_ns).to_msg())
+        channel_stamped_pub = self._pub_audio_channels_stamped[channel]
+        if channel_stamped_pub.get_subscription_count() > 0:
+            channel_stamped_pub.publish(stamped)
         channel_pub = self._pub_audio_channels[channel]
         if channel_pub.get_subscription_count() > 0:
             channel_pub.publish(AudioData(data=as_uint8))
         if channel == self.main_channel.value:
+            if self._pub_audio_stamped.get_subscription_count() > 0:
+                self._pub_audio_stamped.publish(stamped)
             if self._pub_audio.get_subscription_count() > 0:
                 self._pub_audio.publish(AudioData(data=as_uint8))
             if self.is_speaking:
