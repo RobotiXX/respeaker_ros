@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 import usb.core
 import usb.util
+import signal
 
 import rclpy
 from rclpy.node import Node
 import rclpy.time
 import rclpy.duration
 import rclpy.timer
+from rclpy.signals import SignalHandlerOptions
 from rclpy.qos import QoSProfile, QoSDurabilityPolicy
 
 
@@ -140,7 +142,14 @@ class RespeakerNode(Node):
 
 
 def main(args=None):
-    rclpy.init(args=args)
+    # Stop PortAudio while publishers/context are still usable. The default
+    # ROS signal handler shuts the context down before the audio callback ends.
+    rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
+
+    def stop_on_signal(signum, frame):
+        raise KeyboardInterrupt
+
+    previous_sigterm = signal.signal(signal.SIGTERM, stop_on_signal)
 
     publisher = RespeakerNode()
 
@@ -149,10 +158,12 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
 
-    publisher.respeaker_audio.stop()
-    publisher.destroy_node()
-    if rclpy.ok():
-        rclpy.shutdown()
+    finally:
+        publisher.respeaker_audio.stop()
+        publisher.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+        signal.signal(signal.SIGTERM, previous_sigterm)
 
 
 if __name__ == '__main__':
