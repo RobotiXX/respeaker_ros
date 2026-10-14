@@ -63,7 +63,8 @@ class RespeakerNode(Node):
         self.sub_led = self.create_subscription(ColorRGBA, "status_led", self.on_status_led, 1)
 
     def on_audio(self, data, channel):
-        as_uint8 = data.astype(np.uint8)
+        # Preserve both bytes of each signed 16-bit little-endian PCM sample.
+        as_uint8 = np.ascontiguousarray(data, dtype="<i2").view(np.uint8)
         channel_pub = self._pub_audio_channels[channel]
         if channel_pub.get_subscription_count() > 0:
             channel_pub.publish(AudioData(data=as_uint8))
@@ -99,13 +100,13 @@ class RespeakerNode(Node):
             msg = PoseStamped()
             msg.header.frame_id = self.sensor_frame_id.value
             msg.header.stamp = stamp.to_msg()
-            ori = T.quaternion_from_euler(math.radians(doa), 0, 0)
+            ori = T.quaternion_from_euler(0, 0, math.radians(doa))
             msg.pose.position.x = self.doa_xy_offset.value * np.cos(doa_rad)
             msg.pose.position.y = self.doa_xy_offset.value * np.sin(doa_rad)
-            msg.pose.orientation.w = ori[0]
-            msg.pose.orientation.x = ori[1]
-            msg.pose.orientation.y = ori[2]
-            msg.pose.orientation.z = ori[3]
+            msg.pose.orientation.x = ori[0]
+            msg.pose.orientation.y = ori[1]
+            msg.pose.orientation.z = ori[2]
+            msg.pose.orientation.w = ori[3]
             self._pub_doa.publish(msg)
 
         # speech audio
@@ -129,11 +130,13 @@ class RespeakerNode(Node):
 
     def on_status_led(self, msg):
         self.respeaker.set_led_color(r=msg.r, g=msg.g, b=msg.b, a=msg.a)
-        if self.timer_led and self.timer_led.is_alive():
-            self.timer_led.destroy()
-        self.timer_led = rclpy.timer.Timer(rclpy.duration.Duration(3.0),
-                                     lambda e: self.respeaker.set_led_trace(),
-                                     oneshot=True)
+        if self.timer_led is not None:
+            self.destroy_timer(self.timer_led)
+        self.timer_led = self.create_timer(3.0, self.restore_led_trace)
+
+    def restore_led_trace(self):
+        self.timer_led.cancel()
+        self.respeaker.set_led_trace()
 
 
 def main(args=None):
@@ -146,8 +149,10 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
 
+    publisher.respeaker_audio.stop()
     publisher.destroy_node()
-    rclpy.shutdown()
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

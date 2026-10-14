@@ -23,6 +23,8 @@
   <depend>python3-pyaudio</depend>
   <depend>python3-spidev</depend>
   <depend>tf_transformations</depend>
+  <exec_depend>python3-usb</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
